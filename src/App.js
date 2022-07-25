@@ -12,13 +12,17 @@ const TWITTER_HANDLE = 'vsai12';
 const TWITTER_LINK = `https://twitter.com/${TWITTER_HANDLE}`;
 
 const tld = "ysm";
-const CONTRACT_ADDRESS = "0x77ee47f54805f35f016502c3cca27f686b8903a7";
+const CONTRACT_ADDRESS = "0x726A35006E7C763004a2557FF581e81E39faB77F";
 
 const App = () => {
+  const [mints, setMints] = useState([]);
   const [currentAccount, setCurrentAccount] = useState("");
   const [domain, setDomain] = useState("");
   const [record, setRecord] = useState("");
   const [network, setNetwork] = useState('');
+
+  const [editing, setEditing] = useState(false);
+  const [loading, setLoading] = useState(false);
 
   const connectWallet = async () => {
     try {
@@ -61,6 +65,41 @@ const App = () => {
     }
   }
 
+  const fetchMints = async () => {
+    const { ethereum } = window;
+    if (!ethereum) {
+      console.log("Install metamask");
+      return
+    }
+    try {
+      const provider = new ethers.providers.Web3Provider(ethereum);
+      const signer = provider.getSigner();
+      const contract = new ethers.Contract(CONTRACT_ADDRESS, contractAbi.abi, signer);
+
+      console.log("getting all names");
+      const names = await contract.getAllNames();
+      console.log("got all names");
+
+      const mintRecords = await Promise.all(names.map(async (name, index) => {
+        console.log("getting record");
+        const record = await contract.records(name);
+        console.log("got record", record);
+        console.log("getting domain");
+        const owner = await contract.domains(name);
+        console.log("got owner", owner);
+        return {
+          id: index,
+          name: name,
+          record: record,
+          owner: owner,
+        }
+      }));
+      setMints(mintRecords);
+    } catch (error) {
+      console.log(error);
+    }
+  }
+
   const onMintDomain = async () => {
     if (!domain) {
       return
@@ -69,13 +108,13 @@ const App = () => {
       alert("Domain must be at least 3 characters long");
       return
     }
-
+    const { ethereum } = window;
+    if (!ethereum) {
+      alert("Install metamask");
+      return
+    }
+    setLoading(true);
     try {
-      const { ethereum } = window;
-      if (!ethereum) {
-        alert("Install metamask");
-        return
-      }
       const provider = new ethers.providers.Web3Provider(ethereum);
       const signer = provider.getSigner();
       const contract = new ethers.Contract(CONTRACT_ADDRESS, contractAbi.abi, signer);
@@ -92,6 +131,11 @@ const App = () => {
         await tx.wait();
 
         console.log(`Record set! https://www.mumbai.polygonscan.com/tx/${tx.hash}`);
+
+        setTimeout(() => {
+          fetchMints();
+        }, 2000);
+
         setRecord("");
         setDomain("");
       }
@@ -99,9 +143,32 @@ const App = () => {
       alert("Transaction failed!");
       console.error(error);
     }
+    setLoading(false);
   }
 
-  const onSetData = async () => {
+  const updateDomain = async () => {
+    if (!record || !domain) { return }
+    setLoading(true);
+    console.log("Updating domain", domain, "with record", record);
+    try {
+      const { ethereum } = window;
+      if (ethereum) {
+        const provider = new ethers.providers.Web3Provider(ethereum);
+        const signer = provider.getSigner();
+        const contract = new ethers.Contract(CONTRACT_ADDRESS, contractAbi.abi, signer);
+
+        let tx = await contract.setRecord(domain, record);
+        await tx.wait();
+        console.log(`Record set https://mumbai.polygonscan.com/tx/${tx.hash}`);
+
+        fetchMints();
+        setRecord("");
+        setDomain("");
+      }
+    } catch (error) {
+      console.log(error);
+    }
+    setLoading(false);
   }
 
   const renderNotConnectedContainer = () => (
@@ -155,6 +222,44 @@ const App = () => {
     }
   }
 
+  const editRecord = (name) => {
+    setEditing(true);
+    setDomain(name);
+  }
+
+  const renderMints = () => {
+    if (!currentAccount || mints.length === 0) {
+      return
+    }
+    return (
+      <div className="mint-container">
+        <p className="subtitle"> Recently minted domains!</p>
+        <div className="mint-list">
+          { mints.map((mint, index) => {
+            return (
+              <div className="mint-item" key={index}>
+                <div className='mint-row'>
+                  <a className="link" href={`https://testnets.opensea.io/assets/mumbai/${CONTRACT_ADDRESS}/${mint.id}`} target="_blank" rel="noopener noreferrer">
+                    <p className="underlined">{' '}{mint.name}.{tld}{' '}</p>
+                  </a>
+                  {/* If mint.owner is currentAccount, add an "edit" button*/}
+                  { mint.owner.toLowerCase() === currentAccount.toLowerCase() ?
+                    <button className="edit-button" onClick={() => editRecord(mint.name)}>
+                      <img className="edit-icon" src="https://img.icons8.com/metro/26/000000/pencil.png" alt="Edit button" />
+                    </button>
+                    :
+                    null
+                  }
+                </div>
+                <p> {mint.record} </p>
+              </div>)
+            })
+          }
+        </div>
+      </div>
+    );
+  }
+
   const renderInputForm = () => {
     if (network !== 'Polygon Mumbai Testnet') {
       return (
@@ -184,13 +289,24 @@ const App = () => {
           onChange={e => setRecord(e.target.value)}
         />
 
+        { loading && <p>Loading...</p>}
         <div className="button-container">
-          <button className='cta-button mint-button' disabled={null} onClick={onMintDomain}>
-            Mint
-          </button>
-          <button className='cta-button mint-button' disabled={null} onClick={onSetData}>
-            Set data
-          </button>
+          {
+            editing ? (
+              <React.Fragment>
+                <button className='cta-button mint-button' disabled={loading} onClick={updateDomain}>
+                  Set record
+                </button>
+                <button className='cta-button mint-button' disabled={null} onClick={() => setEditing(false) }>
+                  Cancel
+                </button>
+              </React.Fragment>
+            ) : (
+              <button className='cta-button mint-button' disabled={loading} onClick={onMintDomain}>
+                Mint
+              </button>
+            )
+          }
         </div>
 
       </div>
@@ -206,6 +322,12 @@ const App = () => {
   useEffect(() => {
     checkIfWalletIsConnected();
   }, []);
+
+  useEffect(() => {
+    if (network === "Polygon Mumbai Testnet") {
+      fetchMints();
+    }
+  }, [network, currentAccount]);
 
   return (
     <div className="App">
@@ -225,6 +347,7 @@ const App = () => {
         </div>
 
         { !currentAccount ? renderNotConnectedContainer() : renderConnectedContainer() }
+        { renderMints() }
 
         <div className="footer-container">
           <img alt="Twitter Logo" className="twitter-logo" src={twitterLogo} />
